@@ -3417,28 +3417,28 @@ function generateGridScene(scene, grid, cellSize = new three_1.Vector3(1, 1, 1))
         scene.add(mesh);
         return [mesh];
     };
-    grid.forEachCell(cell => {
+    grid.forEachCell((cell) => {
         disposeMeshes(cell);
         if (!cell.visible || cell.clipped)
             return;
         let x = baseX + (grid.rows - cell.rowIdx) * stepX;
         let z = baseZ - (cell.columnIdx) * stepY;
         let cellMeshes = [];
-        cell.tiles.forEach((tile, index) => {
-            const rotation = tile.rotation;
-            const height = tile.height;
+        cell.layers.forEach((layer, index) => {
+            const rotation = layer.rotation;
+            const height = layer.height;
             let y = height * stepY;
             let firstTile = index == 0;
             let tileMeshes;
-            if (tile.type === "platform")
+            if (layer.type === "platform")
                 tileMeshes = addPlatform(x, y, z, rotation, material, firstTile);
-            else if (tile.type === "stairs")
+            else if (layer.type === "stairs")
                 tileMeshes = addStairs(x, y, z, rotation, material, firstTile);
-            else if (tile.type === "bridge")
+            else if (layer.type === "bridge")
                 tileMeshes = addBridge(x, y, z, rotation, material);
             tileMeshes.forEach(mesh => {
                 //material.uniforms.objectPosition.value = mesh.position;
-                mesh.userData = cell;
+                mesh.userData = { cell: cell, layer: layer };
             });
             cellMeshes = cellMeshes.concat(tileMeshes);
         });
@@ -3466,9 +3466,10 @@ function disposeMeshes(cell) {
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RecursiveBacktracker = exports.Wilsons = exports.BinaryTree = exports.ColoredGrid = exports.DistanceGrid = exports.HeightGrid = exports.Grid = exports.Cell = exports.Tile = exports.Distances = void 0;
+exports.RecursiveBacktracker = exports.Wilsons = exports.BinaryTree = exports.ColoredGrid = exports.DistanceGrid = exports.HeightGrid = exports.Grid = exports.Cell = exports.Layer = exports.Distances = void 0;
 const three_1 = __webpack_require__(/*! three */ "./node_modules/three/build/three.cjs");
 const utilities_1 = __webpack_require__(/*! ./utilities */ "./src/utilities.ts");
+const TextGeometry_js_1 = __webpack_require__(/*! three/examples/jsm/geometries/TextGeometry.js */ "./node_modules/three/examples/jsm/geometries/TextGeometry.js");
 class Distances {
     constructor(root) {
         this.root = root;
@@ -3508,14 +3509,14 @@ class Distances {
     }
 }
 exports.Distances = Distances;
-class Tile {
+class Layer {
     constructor(type = "platform", rotation = 0, height = 0) {
         this.type = type;
         this.rotation = rotation;
         this.height = height;
     }
 }
-exports.Tile = Tile;
+exports.Layer = Layer;
 ;
 class Cell {
     constructor(rowIdx, columnIdx) {
@@ -3523,7 +3524,7 @@ class Cell {
         this.columnIdx = columnIdx;
         this.northCell = this.southCell = this.eastCell = this.westCell = null;
         this.links = [];
-        this.tiles = [new Tile()];
+        this.layers = [new Layer()];
         this.visible = true;
         this.clipped = false;
     }
@@ -3540,6 +3541,12 @@ class Cell {
         if (this.westCell && !this.westCell.clipped)
             neighbors.push(this.westCell);
         return neighbors;
+    }
+    getTopmostLayer() {
+        return this.layers[this.layers.length - 1];
+    }
+    getLayerAtHeight(height) {
+        return this.layers.find(l => { return l.height == height; });
     }
     // randomNeighbor() {
     //     return this.neighbors[Math.floor(Math.random() * this.neighbors.length)];
@@ -3586,7 +3593,11 @@ class Cell {
         return distances;
     }
     resetLayers() {
-        this.tiles = [new Tile()];
+        this.layers = [new Layer()];
+        this.links = [];
+    }
+    toString() {
+        return "[" + this.rowIdx + "," + this.columnIdx + "]";
     }
 }
 exports.Cell = Cell;
@@ -3598,13 +3609,16 @@ class Grid {
         this.initialize();
         this.configureCells();
     }
+    getCellHash(rowIdx, columnIdx) {
+        return rowIdx + "," + columnIdx;
+    }
     getCellAt(rowIdx, columnIdx) {
         if (rowIdx < 0
             || rowIdx >= this.rows
             || columnIdx < 0
             || columnIdx >= this.columns)
             return null;
-        return this.cells[rowIdx * this.columns + columnIdx];
+        return this.cells.get(this.getCellHash(rowIdx, columnIdx));
     }
     getRandomCell() {
         const rowIdx = Math.floor(Math.random() * this.rows);
@@ -3612,11 +3626,11 @@ class Grid {
         return this.getCellAt(rowIdx, columnIdx);
     }
     initialize() {
-        this.cells = [];
+        this.cells = new Map();
         for (let row = 0; row < this.rows; ++row) {
             for (let column = 0; column < this.columns; ++column) {
                 let cell = new Cell(row, column);
-                this.cells.push(cell);
+                this.cells.set(this.getCellHash(row, column), cell);
             }
         }
     }
@@ -3630,6 +3644,104 @@ class Grid {
                 cell.westCell = this.getCellAt(row, column - 1);
             }
         }
+    }
+    insertColumn(idx) {
+        if (idx < 0 || idx >= this.columns) {
+            console.log("out of range index");
+            return;
+        }
+        const oldCells = Array.from(this.cells.values());
+        const newCellsForRow = [...Array(this.rows).keys()].map(i => new Cell(i, idx));
+        newCellsForRow.forEach((cell, i) => {
+            if (i + 1 < newCellsForRow.length)
+                cell.southCell = newCellsForRow[i + 1];
+            if (i > 0)
+                cell.northCell = newCellsForRow[i - 1];
+            cell.clipped = this.getCellAt(i, idx).clipped;
+        });
+        this.forEachCell(cell => {
+            if (cell.columnIdx == idx) {
+                const linkIdx = cell.links.indexOf(cell.westCell);
+                if (linkIdx != -1) {
+                    cell.links[linkIdx] = newCellsForRow[cell.rowIdx];
+                    newCellsForRow[cell.rowIdx].links.push(cell);
+                }
+                cell.westCell = newCellsForRow[cell.rowIdx];
+                newCellsForRow[cell.rowIdx].eastCell = cell;
+                ++cell.columnIdx;
+            }
+            else if (cell.columnIdx == idx - 1) {
+                const linkIdx = cell.links.indexOf(cell.eastCell);
+                if (linkIdx != -1) {
+                    cell.links[linkIdx] = newCellsForRow[cell.rowIdx];
+                    newCellsForRow[cell.rowIdx].links.push(cell);
+                }
+                cell.eastCell = newCellsForRow[cell.rowIdx];
+                newCellsForRow[cell.rowIdx].westCell = cell;
+                //++cell.columnIdx;
+            }
+            else if (cell.columnIdx > idx) {
+                ++cell.columnIdx;
+            }
+        });
+        this.cells.clear();
+        oldCells.forEach(cell => {
+            this.cells.set(this.getCellHash(cell.rowIdx, cell.columnIdx), cell);
+        });
+        newCellsForRow.forEach(cell => {
+            this.cells.set(this.getCellHash(cell.rowIdx, cell.columnIdx), cell);
+        });
+        ++this.columns;
+        return newCellsForRow;
+    }
+    insertRow(idx) {
+        if (idx < 0 || idx >= this.rows) {
+            console.log("out of range index");
+            return;
+        }
+        const oldCells = Array.from(this.cells.values());
+        const newCellsForRow = [...Array(this.columns).keys()].map(i => new Cell(idx, i));
+        newCellsForRow.forEach((cell, i) => {
+            if (i + 1 < newCellsForRow.length)
+                cell.eastCell = newCellsForRow[i + 1];
+            if (i > 0)
+                cell.westCell = newCellsForRow[i - 1];
+            cell.clipped = this.getCellAt(idx, i).clipped;
+        });
+        this.forEachCell((cell) => {
+            if (cell.rowIdx == idx) {
+                const linkIdx = cell.links.indexOf(cell.northCell);
+                if (linkIdx != -1) {
+                    cell.links[linkIdx] = newCellsForRow[cell.columnIdx];
+                    newCellsForRow[cell.columnIdx].links.push(cell);
+                }
+                cell.northCell = newCellsForRow[cell.columnIdx];
+                newCellsForRow[cell.columnIdx].southCell = cell;
+                ++cell.rowIdx;
+            }
+            else if (cell.rowIdx == idx - 1) {
+                const linkIdx = cell.links.indexOf(cell.southCell);
+                if (linkIdx != -1) {
+                    cell.links[linkIdx] = newCellsForRow[cell.columnIdx];
+                    newCellsForRow[cell.columnIdx].links.push(cell);
+                }
+                cell.southCell = newCellsForRow[cell.columnIdx];
+                newCellsForRow[cell.columnIdx].northCell = cell;
+                //++cell.rowIdx;
+            }
+            else if (cell.rowIdx > idx) {
+                ++cell.rowIdx;
+            }
+        });
+        this.cells.clear();
+        oldCells.forEach(cell => {
+            this.cells.set(this.getCellHash(cell.rowIdx, cell.columnIdx), cell);
+        });
+        newCellsForRow.forEach(cell => {
+            this.cells.set(this.getCellHash(cell.rowIdx, cell.columnIdx), cell);
+        });
+        ++this.rows;
+        return newCellsForRow;
     }
     forEachCell(predicate) {
         this.cells.forEach(predicate);
@@ -3695,9 +3807,7 @@ class Grid {
         let y3 = y4 - inset;
         return { x1: x1, x2: x2, x3: x3, x4: x4, y1: y1, y2: y2, y3: y3, y4: y4 };
     }
-    draw(scene, cellSize = 5) {
-        const material = new three_1.LineBasicMaterial({ color: 0x000000ff });
-        const material2 = new three_1.LineBasicMaterial({ color: 0xff0000 });
+    draw(scene, cellSize = 5, material, font) {
         const gridWidth = cellSize * this.columns;
         const gridHeight = cellSize * this.rows;
         const gridHalfWidth = gridWidth / 2;
@@ -3710,22 +3820,25 @@ class Grid {
             const inset = cellSize * 0.1;
             const coord = this.cellCoordinatesWithInset(x, y, cellSize, inset);
             const backgroundColor = this.backgroundColorFor(cell);
-            //const body = this.contentsOf(cell);
-            // const x1 = -gridHalfWidth + cell.columnIdx * cellSize;
-            // const y1 = -gridHalfHeight + cell.rowIdx * cellSize;
-            // const x2 = -gridHalfWidth + (cell.columnIdx + 1) * cellSize;
-            // const y2 = -gridHalfHeight + (cell.rowIdx + 1) * cellSize;
+            const body = this.contentsOf(cell);
             if (backgroundColor != null) {
                 this.fillCell(scene, backgroundColor, coord.x2, coord.y2, coord.x3, coord.y3);
             }
-            // if(!cell.northCell)
-            //     this.drawLine(scene, material2, x1, y1, x2, y1);
-            // if(!cell.westCell)
-            //     this.drawLine(scene, material2, x1, y1, x1, y2);
-            // if(!cell.isLinked(cell.eastCell))
-            //     this.drawLine(scene, material2, x2, y1, x2, y2);
-            // if(!cell.isLinked(cell.southCell))
-            //     this.drawLine(scene, material2, x1, y2, x2, y2);
+            if (body != null && typeof body === 'string') {
+                const geometry = new TextGeometry_js_1.TextGeometry(body, {
+                    font: font,
+                    size: 0.8,
+                    height: 0
+                });
+                geometry.computeBoundingBox();
+                const size = new three_1.Vector3();
+                geometry.boundingBox.getSize(size);
+                const xoffset = (cellSize - size.x) / 2;
+                const yoffset = cellSize / 2 - size.y / 2;
+                const mesh = new three_1.Mesh(geometry, material);
+                mesh.position.set(x + xoffset, y + yoffset, 0);
+                scene.add(mesh);
+            }
             if (cell.isLinked(cell.northCell)) {
                 this.drawLine(scene, material, coord.x2, coord.y3, coord.x2, coord.y4);
                 this.drawLine(scene, material, coord.x3, coord.y3, coord.x3, coord.y4);
@@ -3787,10 +3900,10 @@ class Grid {
                 return;
             gridCell.clipped = cell.clipped;
             gridCell.visible = cell.visible;
-            gridCell.tiles = [];
+            gridCell.layers = [];
             cell.tiles.forEach(tile => {
-                const gridTile = new Tile(tile.type, tile.rotation, tile.height);
-                gridCell.tiles.push(gridTile);
+                const gridTile = new Layer(tile.type, tile.rotation, tile.height);
+                gridCell.layers.push(gridTile);
             });
         });
     }
@@ -3813,7 +3926,7 @@ class Grid {
                     column: cell.columnIdx,
                     visible: cell.visible,
                     clipped: cell.clipped,
-                    tiles: cell.tiles
+                    tiles: cell.layers
                 });
             });
             let download = (content, fileName, contentType) => {
@@ -3831,67 +3944,294 @@ class Grid {
 }
 exports.Grid = Grid;
 class HeightGrid extends Grid {
+    contentsOf(cell) {
+        return /*cell.toString() + " " +*/ cell.layers[0].height.toString() + "/" + cell.layers[0].type[0];
+    }
     backgroundColorFor(cell) {
-        const intensity = (this.maxHeight - cell.tiles[0].height) / this.maxHeight;
+        const intensity = (this.maxHeight - cell.layers[0].height) / this.maxHeight;
         const dark = Math.round(255 * intensity) / 255;
         const bright = 128 + Math.round(127 * intensity) / 255;
         //return new Color(dark, bright, dark);
-        return new three_1.Color(intensity, intensity, intensity);
-        //return null;
+        //return new Color(intensity, intensity, intensity);
+        return null;
+    }
+    generateHeightsImpl2(startCell) {
+        let cellsToVisit = [startCell];
+        let visitedCells = [];
+        let heights = new Map();
+        const downhillDirection = new three_1.Vector2(0, this.columns - 1).sub(new three_1.Vector2(this.rows - 1, 0)).normalize();
+        const perpendicularDirection = new three_1.Vector2(downhillDirection.y, -downhillDirection.x);
+        do {
+            const cell = cellsToVisit.shift();
+            visitedCells.push(cell);
+            const fromCells = [];
+            cell.links.forEach(l => {
+                if (visitedCells.indexOf(l) === -1)
+                    cellsToVisit.push(l);
+                else
+                    fromCells.push(l);
+            });
+            const vec = new three_1.Vector2(cell.rowIdx, cell.columnIdx).sub(new three_1.Vector2(0, this.columns - 1));
+            let optimalHeight = Math.round(Math.abs(vec.dot(downhillDirection))
+                + Math.abs(vec.dot(perpendicularDirection)));
+            let cellHeight = optimalHeight;
+            if (fromCells.length > 0) {
+                console.assert(fromCells.length == 1, "more than one path to check...");
+                const fromHeight = heights.get(fromCells[0]);
+                if (Math.abs(fromHeight - optimalHeight) >= 2)
+                    cellHeight = fromHeight + Math.sign(optimalHeight - fromHeight);
+            }
+            heights.set(cell, cellHeight);
+        } while (cellsToVisit.length > 0);
+        let minHeight = Number.MAX_VALUE;
+        let maxHeight = Number.MIN_VALUE;
+        heights.forEach((height, cell) => {
+            minHeight = Math.min(minHeight, height);
+            maxHeight = Math.max(maxHeight, height);
+        });
+        heights.forEach((height, cell) => {
+            const finalH = height - minHeight;
+            cell.layers[0].height = finalH;
+        });
+    }
+    generateHeightsTest(startCell) {
+        let cellsToVisit = [startCell];
+        let visitedCells = [];
+        let heights = new Map();
+        const downhillDirection = new three_1.Vector2(0, this.columns - 1).sub(new three_1.Vector2(this.rows - 1, 0)).normalize();
+        const perpendicularDirection = new three_1.Vector2(downhillDirection.y, -downhillDirection.x);
+        // base pass: assign an height based on the cell position
+        /*this.forEachCell((cell : Cell) => {
+            const vec = new Vector2(cell.rowIdx, cell.columnIdx).sub(new Vector2(0, this.columns-1));
+
+            const h =
+                Math.round(Math.abs(vec.dot(downhillDirection))
+                +  Math.abs(vec.dot(perpendicularDirection)));
+
+            heights.set(cell, h);
+        });*/
+        do {
+            const cell = cellsToVisit.pop();
+            visitedCells.push(cell);
+            cell.links.forEach(l => {
+                if (visitedCells.indexOf(l) !== -1)
+                    return;
+                cellsToVisit.push(l);
+            });
+            const vec = new three_1.Vector2(cell.rowIdx, cell.columnIdx).sub(new three_1.Vector2(0, this.columns - 1));
+            let cellHeight = Math.round(Math.abs(vec.dot(downhillDirection))
+                + Math.abs(vec.dot(perpendicularDirection)));
+            //let currentHeight = heights.get(cell);
+            const notLinkedCells = cell.getNeighbors().filter(n => { return !cell.isLinked(n); });
+            const invalidHeights = [];
+            for (let i = 0; i < notLinkedCells.length; ++i) {
+                const neighborCell = notLinkedCells[i];
+                const h = heights.get(neighborCell);
+                if (h !== null)
+                    invalidHeights.push(h);
+            }
+            if (invalidHeights.indexOf(cellHeight) !== -1) {
+                //try to increment
+                ++cellHeight;
+                // if still invalid, decrement
+                if (invalidHeights.indexOf(cellHeight) !== -1) {
+                    cellHeight -= 2;
+                }
+                // if still invalid, we are fucked (any idea?)
+                if (invalidHeights.indexOf(cellHeight) !== -1) {
+                    console.log("not found a valid weight for the cell " + cell.toString());
+                }
+            }
+            //console.log(cell.toString() + " h: " + cellHeight);
+            heights.set(cell, cellHeight);
+        } while (cellsToVisit.length > 0);
+        let minHeight = Number.MAX_VALUE;
+        let maxHeight = Number.MIN_VALUE;
+        heights.forEach((height, cell) => {
+            minHeight = Math.min(minHeight, height);
+            maxHeight = Math.max(maxHeight, height);
+        });
+        heights.forEach((height, cell) => {
+            const finalH = height - minHeight;
+            cell.layers[0].height = finalH;
+            //console.log(cell.toString() + " => " + finalH);
+        });
+    }
+    addStairs() {
+        for (let row = 0; row < this.rows; ++row) {
+            const columnsToFix = [];
+            for (let column = 0; column < this.columns; ++column) {
+                const cell = this.getCellAt(row, column);
+                if (cell.clipped)
+                    continue;
+                if (cell.isLinked(cell.southCell)
+                    && cell.southCell.layers[0].height != cell.layers[0].height) {
+                    columnsToFix.push(column);
+                }
+            }
+            if (columnsToFix.length > 0) {
+                const newRowCells = this.insertRow(row + 1);
+                newRowCells.forEach((cell, column) => {
+                    if (cell.clipped)
+                        return;
+                    if (columnsToFix.indexOf(column) !== -1) {
+                        const h = this.getCellAt(row, column).layers[0].height;
+                        const nh = cell.southCell.layers[0].height;
+                        if (h > nh) {
+                            cell.layers[0].height = h;
+                            cell.layers[0].rotation = 0;
+                        }
+                        else {
+                            cell.layers[0].height = h + 1;
+                            cell.layers[0].rotation = 180;
+                        }
+                        cell.layers[0].type = "stairs";
+                    }
+                    else {
+                        cell.layers[0].height = cell.southCell.layers[0].height;
+                    }
+                });
+                ++row;
+            }
+        }
+        for (let column = 0; column < this.columns; ++column) {
+            const rowsToFix = [];
+            for (let row = 0; row < this.rows; ++row) {
+                const cell = this.getCellAt(row, column);
+                if (cell.clipped)
+                    continue;
+                if (cell.isLinked(cell.eastCell)
+                    && cell.eastCell.layers[0].height != cell.layers[0].height) {
+                    rowsToFix.push(row);
+                }
+            }
+            if (rowsToFix.length > 0) {
+                const newColumnCells = this.insertColumn(column + 1);
+                newColumnCells.forEach((cell, row) => {
+                    if (cell.clipped)
+                        return;
+                    if (rowsToFix.indexOf(row) !== -1) {
+                        const h = this.getCellAt(row, column).layers[0].height;
+                        const nh = cell.eastCell.layers[0].height;
+                        if (h > nh) {
+                            cell.layers[0].height = h;
+                            cell.layers[0].rotation = 270;
+                        }
+                        else {
+                            cell.layers[0].height = h + 1;
+                            cell.layers[0].rotation = 90;
+                        }
+                        cell.layers[0].type = "stairs";
+                    }
+                    else {
+                        cell.layers[0].height = cell.eastCell.layers[0].height;
+                    }
+                });
+                ++column;
+            }
+        }
     }
     generateHeightsV2(numOfIterations = null) {
-        if (numOfIterations == null) {
-            numOfIterations = Math.round(this.cells.length * 0.15);
-        }
+        // if(numOfIterations == null) {
+        //     numOfIterations = Math.round(this.cells.length * 0.15);
+        // }
         const downhillDirection = new three_1.Vector2(0, this.columns - 1).sub(new three_1.Vector2(this.rows - 1, 0)).normalize();
-        // base pass
+        const perpendicularDirection = new three_1.Vector2(downhillDirection.y, -downhillDirection.x);
+        // base pass: assign an height based on the cell position
         this.forEachCell((cell) => {
-            cell.tiles[0].height = Math.abs(new three_1.Vector2(cell.rowIdx, cell.columnIdx).sub(new three_1.Vector2(0, this.columns - 1)).dot(downhillDirection));
+            const vec = new three_1.Vector2(cell.rowIdx, cell.columnIdx).sub(new three_1.Vector2(0, this.columns - 1));
+            cell.layers[0].height =
+                Math.round(Math.abs(vec.dot(downhillDirection))
+                    + Math.abs(vec.dot(perpendicularDirection)));
+            //cell.tiles[0].height = Math.round(Math.abs(cell.columnIdx - this.columns / 2));
         });
-        /*let propagateHeightChange = (cell: Cell, h: number) => {
-            cell.tiles[0].height = h;
-            cell.links.forEach(linkedCell => {
-                if(Math.abs(linkedCell.tiles[0].height - h) > 1) {
-                    let newH = h;// + Math.round(Math.random());
-                    propagateHeightChange(linkedCell, newH);
+        const findHighestCell = () => {
+            let maxH = -1;
+            let found = null;
+            this.cells.forEach((cell) => {
+                if (!cell.clipped) {
+                    const h = cell.layers[0].height;
+                    if (h > maxH) {
+                        found = cell;
+                        maxH = h;
+                    }
                 }
             });
+            return found;
         };
-
-        for(let i = 0; i < numOfIterations; ++i) {
-            const cell = this.getRandomCell();
-            const h = cell.tiles[0].height + Math.round(Math.random()) * 2 - 1; // +/- 1
-
-            //const p = (this.rows - cell.rowIdx) / this.rows;
-            //const h = cell.tiles[0].height  + ((Math.random() > p) ? Math.round(Math.random()) : -Math.round(Math.random()));
-            //console.log(cell.rowIdx + " -> " + p + " -> " + cell.tiles[0].height + " " + h);
-
-            propagateHeightChange(cell, h);
-        }*/
-        /*for(let i = 0; i < numOfIterations; ++i) {
-            const cell = this.getRandomCell();
-
-            const h = cell.height + Math.round(Math.random()) * 2 - 1; // +/- 1
-            let valid = true;
-            cell.links.forEach(linkedCell => {
-                if(Math.abs(linkedCell.height - h) > 1) {
-                    valid = false;
+        let cell = findHighestCell();
+        let visitedCells = [];
+        let cellsToVisit = [cell];
+        do {
+            cell = cellsToVisit.pop();
+            visitedCells.push(cell);
+            const cellHeight = cell.layers[0].height;
+            const links = cell.links;
+            links.forEach(l => {
+                if (visitedCells.indexOf(l) !== -1)
+                    return;
+                cellsToVisit.push(l);
+                //cellsToVisit.sort((a,b) => { return a.tiles[0].height - b.tiles[0].height;});
+                if (l.layers[0].height == cellHeight) {
+                    return;
                 }
+                let stairs = false;
+                let rotation = 0;
+                const linkedNorth = l.isLinked(l.northCell);
+                const linkedSouth = l.isLinked(l.southCell);
+                const linkedWest = l.isLinked(l.westCell);
+                const linkedEast = l.isLinked(l.eastCell);
+                let nextStraightCell;
+                if (cell.northCell == l && linkedNorth && !(linkedEast || linkedWest)) {
+                    nextStraightCell = l.northCell;
+                    stairs = true;
+                    rotation = 180;
+                }
+                // else if(cell.southCell == l && linkedSouth && !(linkedEast || linkedWest)) {
+                //     nextStraightCell = l.southCell;
+                //     stairs = true;
+                //     rotation = 0;
+                // }
+                else if (cell.eastCell == l && linkedEast && !(linkedNorth || linkedSouth)) {
+                    nextStraightCell = l.eastCell;
+                    stairs = true;
+                    rotation = -90;
+                }
+                // else if(cell.westCell == l && linkedWest && !(linkedNorth || linkedSouth)) {
+                //     nextStraightCell = l.westCell;
+                //     stairs = true;
+                //     rotation = 90;
+                // }
+                if (cell.layers[0].type === "platform")
+                    l.layers[0].height = cellHeight;
+                else if (cell.layers[0].type === "stairs")
+                    l.layers[0].height = cellHeight - 1;
+                if (stairs) {
+                    console.log("Cell " + cell.toString() + " set as stairs with h=" + cellHeight);
+                    l.layers[0].type = "stairs";
+                    l.layers[0].rotation = rotation;
+                    //l.tiles[0].height = cellHeight;
+                    //nextStraightCell.tiles[0].height = cellHeight - 1;
+                    //console.log("Cell " + nextStraightCell.toString() + " set h=" + (cellHeight - 1));
+                } /*else {
+                    if(cell.tiles[0].type === "platform")
+                        l.tiles[0].height = cellHeight;
+                    else if(cell.tiles[0].type === "stairs")
+                        l.tiles[0].height = cellHeight - 1;
+                }*/
             });
-            
-            if(valid) {
-                cell.height = h;
-            }
-        }*/
+        } while (cellsToVisit.length > 0);
         this.minHeight = Number.MAX_VALUE;
         this.maxHeight = Number.MIN_VALUE;
         this.forEachCell((cell) => {
+            if (cell.clipped)
+                return;
             //console.log("cell:" + cell.rowIdx + " " + cell.columnIdx + " -> " + cell.height);
-            this.minHeight = Math.min(this.minHeight, cell.tiles[0].height);
-            this.maxHeight = Math.max(this.maxHeight, cell.tiles[0].height);
+            this.minHeight = Math.min(this.minHeight, cell.layers[0].height);
+            this.maxHeight = Math.max(this.maxHeight, cell.layers[0].height);
         });
-        this.forEachCell(cell => {
-            cell.height -= this.minHeight;
+        this.forEachCell((cell) => {
+            cell.layers[0].height -= this.minHeight;
         });
         this.maxHeight -= this.minHeight;
     }
@@ -3957,8 +4297,8 @@ class HeightGrid extends Grid {
         this.maxHeight = Number.MIN_VALUE;
         this.forEachCell((cell) => {
             //console.log("cell:" + cell.rowIdx + " " + cell.columnIdx + " -> " + cell.height);
-            this.minHeight = Math.min(this.minHeight, cell.tiles[0].height);
-            this.maxHeight = Math.max(this.maxHeight, cell.tiles[0].height);
+            this.minHeight = Math.min(this.minHeight, cell.layers[0].height);
+            this.maxHeight = Math.max(this.maxHeight, cell.layers[0].height);
         });
         console.log("min h: " + this.minHeight);
         console.log("max h: " + this.maxHeight);
@@ -4013,7 +4353,8 @@ class BinaryTree {
 exports.BinaryTree = BinaryTree;
 class Wilsons {
     static on(grid) {
-        const unvisited = [...grid.cells];
+        let unvisited = Array.from(grid.cells.values()); //[...grid.cells];
+        unvisited = unvisited.filter(cell => { return !cell.clipped; });
         let randomIndex = () => { return Math.floor(Math.random() * unvisited.length); };
         let idx = randomIndex();
         //let first = unvisited[idx];
@@ -4179,8 +4520,8 @@ function refreshLayersWidget(model) {
     cellLayerWidgets.forEach(widget => { layersWidgetFolder.removeFolder(widget); });
     cellLayerWidgets = [];
     if (model.selectedCell) {
-        for (let i = model.selectedCell.tiles.length - 1; i >= 0; --i) {
-            const layer = model.selectedCell.tiles[i];
+        for (let i = model.selectedCell.layers.length - 1; i >= 0; --i) {
+            const layer = model.selectedCell.layers[i];
             const layerFolder = layersWidgetFolder.addFolder("layer " + i);
             layerFolder.add(layer, 'type', {
                 "platform": "platform",
@@ -4231,6 +4572,8 @@ function createView(model) {
     loadAndSaveFolder.open();
     gridEditingFolder = gui.addFolder("grid editing");
     gridEditingFolder.open();
+    gridEditingFolder.add(model, 'smartEditing');
+    gridEditingFolder.add(model, 'baseHeight');
     let gridGenFolder = gridEditingFolder.addFolder("generation");
     gridGenFolder.open();
     //gridGenFolder.add(model.cellSize, "x").name("cellSizeXZ").min(0.5).max(5).step(0.1).onChange(() => { model.onGenerationParamChanged(); });
@@ -4244,6 +4587,7 @@ function createView(model) {
     gridGenFolder.add(model.clipRectangle, 'bottom').name("clip-rect bottom").min(1).max(25).step(1); //.onChange(() => { model.onGenerationParamChanged(); });
     gridGenFolder.add(model.clipRectangle, 'top').name("clip-rect top").min(1).max(25).step(1); //.onChange(() => { model.onGenerationParamChanged(); });
     gridGenFolder.add(model, 'onGenerationParamChanged').name("--> apply changes... <-- ").onChange(() => { model.onGenerationParamChanged(); });
+    gridGenFolder.add(model, 'onProcGeneration').name("--> PROC GEN <-- ").onChange(() => { model.onProcGeneration(); });
     selectedCellFolder = gridEditingFolder.addFolder("selected cell");
     selectedCellFolder.open();
     refreshSelectedCellWidget(model);
@@ -4284,6 +4628,8 @@ class Model {
         this.outlineParams = {
             threshold: 0.01
         };
+        this.smartEditing = true;
+        this.baseHeight = 0;
         // public moveUpLayer: Function;
         // public moveDownLayer: Function;
     }
@@ -4319,9 +4665,9 @@ class Player {
         this.step = this.cellSize.x;
         scene.add(this.mesh);
     }
-    placeOnCell(cell) {
+    placeOnCell(cell, layer) {
         this.cell = cell;
-        this.layerIdx = cell.tiles.length - 1;
+        this.layer = layer;
         this.u = this.v = 0;
         this.updateMeshPosition();
     }
@@ -4332,14 +4678,14 @@ class Player {
         const nextCell = this.getCellInFront(dir);
         if (nextCell && nextCell.visible && !nextCell.clipped) {
             let validLayer;
-            const startHeight = this.cell.tiles[this.layerIdx].height;
-            for (let i = 0; i < nextCell.tiles.length; ++i) {
-                const goalHeight = nextCell.tiles[i].height;
+            const startHeight = this.layer.height;
+            for (let i = 0; i < nextCell.layers.length; ++i) {
+                const goalHeight = nextCell.layers[i].height;
                 if (goalHeight === startHeight) {
                     validLayer = i;
                     break;
                 }
-                else if ((nextCell.tiles[i].type === "stairs" || this.cell.tiles[this.layerIdx].type === "stairs")
+                else if ((nextCell.layers[i].type === "stairs" || this.layer.type === "stairs")
                     && Math.abs(goalHeight - startHeight) == 1) {
                     validLayer = i;
                     break;
@@ -4347,7 +4693,7 @@ class Player {
             }
             if (validLayer != null) {
                 this.cell = nextCell;
-                this.layerIdx = validLayer;
+                this.layer = nextCell.layers[validLayer];
             }
         }
         //this.u = Math.max(-0.5, Math.min(this.u + uOffset, 0.5));
@@ -4360,12 +4706,12 @@ class Player {
         return this.grid.getCellAt(row, column);
     }
     updateMeshPosition() {
-        if (!this.cell)
+        if (!this.cell || !this.layer)
             return null;
         const pos = (0, generation_1.calculateCellPosition)(this.grid, this.cell, this.cellSize);
         pos.x += this.u * this.cellSize.x;
         pos.z += this.v * this.cellSize.x;
-        pos.y = this.cell.tiles[this.layerIdx].height;
+        pos.y = this.layer.height;
         this.mesh.position.set(pos.x, pos.y, pos.z);
     }
 }
@@ -90673,6 +91019,76 @@ class MapControls extends OrbitControls {
 
 /***/ }),
 
+/***/ "./node_modules/three/examples/jsm/geometries/TextGeometry.js":
+/*!********************************************************************!*\
+  !*** ./node_modules/three/examples/jsm/geometries/TextGeometry.js ***!
+  \********************************************************************/
+/***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "TextGeometry": () => (/* binding */ TextGeometry)
+/* harmony export */ });
+/* harmony import */ var three__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! three */ "./node_modules/three/build/three.module.js");
+/**
+ * Text = 3D Text
+ *
+ * parameters = {
+ *  font: <THREE.Font>, // font
+ *
+ *  size: <float>, // size of the text
+ *  height: <float>, // thickness to extrude text
+ *  curveSegments: <int>, // number of points on the curves
+ *
+ *  bevelEnabled: <bool>, // turn on bevel
+ *  bevelThickness: <float>, // how deep into text bevel goes
+ *  bevelSize: <float>, // how far from text outline (including bevelOffset) is bevel
+ *  bevelOffset: <float> // how far from text outline does bevel start
+ * }
+ */
+
+
+
+class TextGeometry extends three__WEBPACK_IMPORTED_MODULE_0__.ExtrudeGeometry {
+
+	constructor( text, parameters = {} ) {
+
+		const font = parameters.font;
+
+		if ( font === undefined ) {
+
+			super(); // generate default extrude geometry
+
+		} else {
+
+			const shapes = font.generateShapes( text, parameters.size );
+
+			// translate parameters to ExtrudeGeometry API
+
+			parameters.depth = parameters.height !== undefined ? parameters.height : 50;
+
+			// defaults
+
+			if ( parameters.bevelThickness === undefined ) parameters.bevelThickness = 10;
+			if ( parameters.bevelSize === undefined ) parameters.bevelSize = 8;
+			if ( parameters.bevelEnabled === undefined ) parameters.bevelEnabled = false;
+
+			super( shapes, parameters );
+
+		}
+
+		this.type = 'TextGeometry';
+
+	}
+
+}
+
+
+
+
+
+/***/ }),
+
 /***/ "./node_modules/three/examples/jsm/postprocessing/EffectComposer.js":
 /*!**************************************************************************!*\
   !*** ./node_modules/three/examples/jsm/postprocessing/EffectComposer.js ***!
@@ -91529,7 +91945,6 @@ var exports = __webpack_exports__;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 __webpack_require__(/*! ../style.css */ "./src/style.css");
-//import * as d3 from 'd3';
 const OrbitControls_1 = __webpack_require__(/*! three/examples/jsm/controls/OrbitControls */ "./node_modules/three/examples/jsm/controls/OrbitControls.js");
 const grid_1 = __webpack_require__(/*! ../grid */ "./src/grid.ts");
 const generation_1 = __webpack_require__(/*! ../generation */ "./src/generation.ts");
@@ -91540,6 +91955,11 @@ const model_1 = __webpack_require__(/*! ../model */ "./src/model.ts");
 const three_1 = __webpack_require__(/*! three */ "./node_modules/three/build/three.cjs");
 const player_1 = __webpack_require__(/*! ../player */ "./src/player.ts");
 const exampleLevelData = __webpack_require__(/*! ../example_level.json */ "./src/example_level.json");
+//import { loadModel } from '../loadmodel';
+// let horse = require('../assets/horse.glb');
+// loadModel(horse).then(() => {
+//   console.log("bingo");
+// });
 window.addEventListener('keydown', keydown);
 // window.addEventListener('load', (event) => {});
 window.addEventListener('resize', onWindowResize, false);
@@ -91554,12 +91974,15 @@ function onMouseDown(event) {
     let picked = false;
     for (let i = 0; i < intersects.length; ++i) {
         const hit = intersects[i];
-        if (hit.object.userData instanceof grid_1.Cell) {
-            const cell = hit.object.userData;
-            console.log("picked cell: [" + cell.rowIdx + "," + cell.columnIdx + "]");
-            setSelectedCell(cell);
-            picked = true;
-            break;
+        if (hit.object.userData) {
+            const cell = hit.object.userData.cell;
+            const layer = hit.object.userData.layer;
+            if (cell != null && layer != null) {
+                console.log("picked cell: " + cell.toString());
+                setSelectedCellAndLayer(cell, layer);
+                picked = true;
+                break;
+            }
         }
     }
     if (!picked) {
@@ -91571,7 +91994,19 @@ function onWindowResize() {
     camera.updateProjectionMatrix();
     (0, rendering_1.getRenderer)().setSize(window.innerWidth, window.innerHeight);
 }
-function genGridFromExample() {
+function procGenGrid(model) {
+    // model.grid.forEachCell((cell : Cell) => {
+    //   cell.resetLayers();
+    // });
+    model.grid = new grid_1.HeightGrid(32, 32);
+    (0, grid_generation_1.clipCells)(model.grid, model.cellSize, 45, model.clipRectangle, true);
+    //model.grid.braid(0.5);
+    grid_1.RecursiveBacktracker.on(model.grid);
+    //(model.grid as HeightGrid).generateHeightsV2();
+    model.grid.generateHeightsImpl2(model.grid.getCellAt(11, 19));
+    model.grid.addStairs();
+}
+function genGridFromExample(model) {
     model.grid.importFromJSON(exampleLevelData); // = Grid.createFromJSON(exampleLevelData);
     model.numRows = model.grid.rows;
     model.numColumns = model.grid.columns;
@@ -91583,32 +92018,27 @@ function genGrid(model) {
         });
     }
     (0, grid_generation_1.clipCells)(model.grid, model.cellSize, 45, model.clipRectangle, model.overrideVisibilityOnRegeneration);
-    // TEST:
-    // const downhillDirection = new Vector2(0, model.grid.columns-1).sub(new Vector2(model.grid.rows-1, 0)).normalize();
-    // model.grid.forEachCell((cell : Cell) => {
-    //   cell.tiles[0].height = Math.abs(Math.round(new Vector2(cell.rowIdx, cell.columnIdx).sub(new Vector2(0, model.grid.columns-1)).dot(downhillDirection))) - 15;
-    // });
 }
 let model = new model_1.Model();
-model.grid = new grid_1.Grid(32, 32);
+model.grid = new grid_1.HeightGrid(32, 32);
 model.selectedCell = model.grid.getCellAt(15, 15);
 model.addLayer = () => {
     if (!model.selectedCell)
         return;
     let height = 0;
-    if (model.selectedCell.tiles.length > 0)
-        height = model.selectedCell.tiles.at(model.selectedCell.tiles.length - 1).height + 1;
-    model.selectedCell.tiles.push(new grid_1.Tile("bridge", 0, height));
+    if (model.selectedCell.layers.length > 0)
+        height = model.selectedCell.layers.at(model.selectedCell.layers.length - 1).height + 1;
+    model.selectedCell.layers.push(new grid_1.Layer("bridge", 0, height));
     (0, gui_1.refreshLayersWidget)(model);
     generateScene();
 };
 model.removeLayer = (layer) => {
     if (!model.selectedCell)
         return;
-    if (model.selectedCell.tiles.length == 1)
+    if (model.selectedCell.layers.length == 1)
         return;
-    let index = model.selectedCell.tiles.indexOf(layer);
-    model.selectedCell.tiles.splice(index, 1);
+    let index = model.selectedCell.layers.indexOf(layer);
+    model.selectedCell.layers.splice(index, 1);
     (0, gui_1.refreshLayersWidget)(model);
     generateScene();
 };
@@ -91628,6 +92058,11 @@ model.onRenderingParamChanged = () => {
     const uniforms = (0, rendering_1.getOutlinePass)().fsQuad.material.uniforms;
     uniforms.threshold.value = model.outlineParams.threshold;
 };
+model.onProcGeneration = () => {
+    procGenGrid(model);
+    (0, gui_1.refreshSelectedCellWidget)(model);
+    generateScene();
+};
 model.onGenerationParamChanged = () => {
     genGrid(model);
     (0, gui_1.refreshSelectedCellWidget)(model);
@@ -91641,55 +92076,177 @@ model.onResetCamera = () => {
 model.onChange = () => {
     generateScene();
 };
+function editCell(rowOffset, columnOffset, heightOffset) {
+    // if(!model.smartEditing) {
+    //   moveSelectedCell(rowOffset, columnOffset);
+    //   return;
+    // }
+    if (model.selectedCell == null || model.selectedLayer == null) {
+        console.error("no selected cell/layer");
+        return;
+    }
+    const isValidMoving = (cell, layer, offset) => {
+        if (layer.type === "platform" || layer.type === "bridge")
+            return true;
+        else if (layer.type === "stairs") {
+            return (Math.abs(offset.x) > 0 && (layer.rotation == 0 || layer.rotation == 180))
+                || (Math.abs(offset.y) > 0 && (layer.rotation == 90 || layer.rotation == 270));
+        }
+    };
+    const getNextHeight = (cell, layer, offset) => {
+        if (layer.type === "platform" || layer.type === "bridge")
+            return layer.height;
+        else if (layer.type === "stairs") {
+            if (Math.abs(offset.x) > 0) {
+                if ((layer.rotation == 180 && offset.x == 1) || (layer.rotation == 0 && offset.x == -1))
+                    return layer.height;
+                else
+                    return layer.height - 1;
+            }
+            else {
+                if ((layer.rotation == 90 && offset.y == 1) || (layer.rotation == 270 && offset.y == -1))
+                    return layer.height;
+                else
+                    return layer.height - 1;
+            }
+        }
+    };
+    const row = model.selectedCell.rowIdx + rowOffset;
+    const column = model.selectedCell.columnIdx + columnOffset;
+    let editCell = model.grid.getCellAt(row, column);
+    if (!isValidMoving(model.selectedCell, model.selectedLayer, new three_1.Vector2(rowOffset, columnOffset)))
+        return;
+    console.log("editing " + editCell.toString() + ", height-offset: " + heightOffset);
+    const nextCellHeight = getNextHeight(model.selectedCell, model.selectedLayer, new three_1.Vector2(rowOffset, columnOffset));
+    let editLayer = editCell.getLayerAtHeight(nextCellHeight);
+    if (!editLayer) {
+        editLayer = editCell.getLayerAtHeight(nextCellHeight + 1);
+        if (editLayer && editLayer.type !== "stairs")
+            editLayer = null;
+    }
+    if (heightOffset != 0 && editLayer && editLayer.type !== "stairs")
+        editLayer = null;
+    if (editLayer && !isValidMoving(editCell, editLayer, new three_1.Vector2(rowOffset, columnOffset))) {
+        return;
+    }
+    if (model.smartEditing) {
+        if (editCell.layers.length == 1
+            && editCell.layers[0].height == 0
+            && editCell.layers[0].type === "platform") {
+            editCell.layers = [];
+            editLayer = null;
+        }
+        //if(editCell.clipped) {
+        editCell.clipped = false;
+        editCell.visible = true;
+        //}
+        if (editLayer == null) {
+            if (heightOffset == 0) { // platform / bridge
+                const upperLayers = editCell.layers.filter(l => { return l.height > nextCellHeight; });
+                const downLayers = editCell.layers.filter(l => { return l.height < nextCellHeight; });
+                upperLayers.forEach(l => {
+                    if (l.type === "platform")
+                        l.type = "bridge";
+                });
+                // if(upperLayers.length > 0) {
+                //   upperLayers[0].type = "bridge";
+                // }
+                editLayer = new grid_1.Layer("bridge", 0, nextCellHeight);
+                if (downLayers.length == 0) {
+                    editLayer.type = "platform";
+                }
+                editCell.layers.push(editLayer);
+                editCell.layers.sort((a, b) => { return a.height - b.height; });
+            }
+            else if (heightOffset == -1) { // staris down
+                editLayer = new grid_1.Layer("stairs", 0, nextCellHeight);
+                editCell.layers.push(editLayer);
+                editCell.layers.sort((a, b) => { return a.height - b.height; });
+                if (rowOffset == -1)
+                    editLayer.rotation = 180;
+                else if (rowOffset == 1)
+                    editLayer.rotation = 0;
+                else if (columnOffset == -1)
+                    editLayer.rotation = 90;
+                else if (columnOffset == 1)
+                    editLayer.rotation = 270;
+            }
+            else if (heightOffset == 1) { // staris up
+                editLayer = new grid_1.Layer("stairs", 0, nextCellHeight + 1);
+                editCell.layers.push(editLayer);
+                editCell.layers.sort((a, b) => { return a.height - b.height; });
+                if (rowOffset == 1)
+                    editLayer.rotation = 180;
+                else if (rowOffset == -1)
+                    editLayer.rotation = 0;
+                else if (columnOffset == 1)
+                    editLayer.rotation = 90;
+                else if (columnOffset == -1)
+                    editLayer.rotation = 270;
+            }
+        }
+    }
+    else {
+        if (editLayer == null)
+            return;
+    }
+    model.selectedCell = editCell;
+    model.selectedLayer = editLayer;
+    (0, gui_1.refreshSelectedCellWidget)(model);
+    updateSelectedCellMarker();
+    player.placeOnCell(editCell, editLayer);
+    generateScene();
+}
 function moveSelectedCell(rowOffset, columnOffset) {
     if (model.selectedCell) {
         const row = model.selectedCell.rowIdx + rowOffset;
         const column = model.selectedCell.columnIdx + columnOffset;
         const newCell = model.grid.getCellAt(row, column);
         if (newCell && !newCell.clipped) {
-            setSelectedCell(newCell);
+            setSelectedCellAndLayer(newCell, null);
         }
     }
 }
-function setSelectedCell(cell) {
+function setSelectedCellAndLayer(cell, layer) {
     model.selectedCell = cell;
+    model.selectedLayer = layer;
     (0, gui_1.refreshSelectedCellWidget)(model);
     updateSelectedCellMarker();
-    player.placeOnCell(cell);
+    player.placeOnCell(cell, layer);
 }
 function incrementHeightOfSelectedCell() {
-    if (model.selectedCell) {
-        model.selectedCell.tiles[0].height += 1;
+    if (model.selectedLayer) {
+        model.selectedLayer.height += 1;
         (0, gui_1.refreshSelectedCellWidget)(model);
         generateScene();
     }
 }
 function decrementHeightOfSelectedCell() {
-    if (model.selectedCell) {
-        model.selectedCell.tiles[0].height -= 1;
+    if (model.selectedLayer) {
+        model.selectedLayer.height -= 1;
         (0, gui_1.refreshSelectedCellWidget)(model);
         generateScene();
     }
 }
 function setSelectedCellHeight(height) {
-    if (model.selectedCell) {
-        model.selectedCell.tiles[0].height = height;
+    if (model.selectedLayer) {
+        model.selectedLayer.height = model.baseHeight + height;
         (0, gui_1.refreshSelectedCellWidget)(model);
         generateScene();
     }
 }
 function rotateSelectedCell() {
-    if (model.selectedCell) {
-        model.selectedCell.tiles[0].rotation = (model.selectedCell.tiles[0].rotation + 90) % 360;
+    if (model.selectedLayer) {
+        model.selectedLayer.rotation = (model.selectedLayer.rotation + 90) % 360;
         (0, gui_1.refreshSelectedCellWidget)(model);
         generateScene();
     }
 }
 function toggleSelectedCellLayerType() {
-    if (model.selectedCell) {
+    if (model.selectedLayer) {
         const types = ["platform", "stairs", "bridge"];
-        const currentSelectedIdx = types.indexOf(model.selectedCell.tiles[0].type);
-        model.selectedCell.tiles[0].type = types[(currentSelectedIdx + 1) % types.length];
+        const currentSelectedIdx = types.indexOf(model.selectedLayer.type);
+        model.selectedLayer.type = types[(currentSelectedIdx + 1) % types.length];
         (0, gui_1.refreshSelectedCellWidget)(model);
         generateScene();
     }
@@ -91705,26 +92262,31 @@ function keydown(event) {
     console.log("keydown: " + event.keyCode);
     switch (event.keyCode) {
         case 87: // W
-            player.move(0.2, 0);
+            editCell(1, 0, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
+            //player.move(0.2, 0);
             break;
         case 83: // S
-            player.move(-0.2, 0);
+            editCell(-1, 0, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
+            //player.move(-0.2, 0);
             break;
         case 65: // A
-            player.move(0, -0.2);
+            editCell(0, -1, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
+            //player.move(0, -0.2);
             break;
         case 68: // D
-            player.move(0, 0.2);
+            editCell(0, 1, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
+            //player.move(0, 0.2);
             break;
+        case 96: // numpad 0
         case 97: // numpad 1
         case 98: // numpad 2
-        case 99: // numpad 2
-        case 100: // numpad 2
-        case 101: // numpad 2
-        case 102: // numpad 2
-        case 103: // numpad 2
-        case 104: // numpad 2
-        case 105: // numpad 2
+        case 99: // numpad 3
+        case 100: // numpad 4
+        case 101: // numpad 5
+        case 102: // numpad 6
+        case 103: // numpad 7
+        case 104: // numpad 8
+        case 105: // numpad 9
             setSelectedCellHeight(event.keyCode - 96);
             break;
         case 106: // *
@@ -91742,25 +92304,29 @@ function keydown(event) {
         case 86: // V
             toggleSelectedCellVisibility();
             break;
+        case 48: // 0
         case 49: // 1
-            break;
         case 50: // 2
-            break;
         case 51: // 3
-            break;
         case 52: // 4
+        case 53: // 5
+        case 54: // 6
+        case 55: // 7
+        case 56: // 8
+        case 57: // 9
+            setSelectedCellHeight(event.keyCode - 48);
             break;
         case 40: // down
-            moveSelectedCell(-1, 0);
+            editCell(-1, 0, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
             break;
         case 37: // left
-            moveSelectedCell(0, -1);
+            editCell(0, -1, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
             break;
         case 39: // right
-            moveSelectedCell(0, 1);
+            editCell(0, 1, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
             break;
         case 38: // up
-            moveSelectedCell(1, 0);
+            editCell(1, 0, event.shiftKey ? 1 : (event.ctrlKey ? -1 : 0));
             break;
     }
 }
@@ -91774,7 +92340,8 @@ const camera = new three_1.PerspectiveCamera(50, aspect, 0.1, 100);
 const controls = new OrbitControls_1.OrbitControls(camera, scene3d);
 camera.position.set(model.cameraPosition.x, model.cameraPosition.y, model.cameraPosition.z);
 controls.target.set(0, 0, 0);
-genGridFromExample();
+//procGenGrid(model);
+genGridFromExample(model);
 //genGrid(model);
 (0, gui_1.createView)(model);
 const scene = (0, rendering_1.initRenderer)(scene3d, camera);
@@ -91798,7 +92365,7 @@ function generateScene() {
     (0, generation_1.generateGridScene)(scene, model.grid, cellSize);
     (0, generation_1.generateCellMarker)(scene, model.grid, model.selectedCell, cellSize);
     player = generatePlayer(model.grid, model.cellSize);
-    player.placeOnCell(model.selectedCell);
+    player.placeOnCell(model.selectedCell, model.selectedLayer);
     updateSelectedCellMarker();
 }
 function updateSelectedCellMarker() {

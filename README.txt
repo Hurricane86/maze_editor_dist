@@ -25,8 +25,12 @@ You can reset the camera using the UI and if you want play with the position of 
 
 There is a dummy red cylinder as cursor (the "player") that you can move with W/A/S/D keys.
 
+When "smart editing" is enabled you build the level moving the cursor directly.
+Keep SHIFT pressed to go up or CTRL pressed to go down. Stairs, bridge etc are automatically placed!
+
 other useful shortcuts:
 up/down/left/right => to move it wherever you want without any constraint (but only on not-clipped cells).
-numpad +/-         => to increment/decrement of one the height of the selected cell (but always the top layer!)
-numpad *           => to rotate the selected cell (but always the top layer!)
-numpad /           => to change the type of the selected cell (but always the top layer!)
+numpad +/-         => to increment/decrement of one the height of the selected cell layer
+numpad *           => to rotate the selected cell layer
+numpad /           => to change the type of the selected cell layer
+0-9                => to change the height of the selected cell layer (final height = base height + 0/9)
